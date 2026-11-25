@@ -1,0 +1,244 @@
+{
+  "name": "LendLoop \u2013 Overdue reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "o1-schedule",
+      "name": "Every day at 08:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = $env.LENDLOOP_WEBHOOK_SECRET;\nconst site = $env.LENDLOOP_CONVEX_SITE_URL;\nif (!secret) throw new Error('LENDLOOP_WEBHOOK_SECRET is not set');\nif (!site) throw new Error('LENDLOOP_CONVEX_SITE_URL is not set');\n\nconst body = JSON.stringify({});\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst hex = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');\n\nreturn [{\n  json: {\n    url: `${site.replace(/\\/$/, '')}/overdue-loans`,\n    timestamp,\n    signature: `v1=${hex}`,\n    body,\n  },\n}];\n"
+      },
+      "id": "o2-sign",
+      "name": "Sign overdue-loans request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{$json.timestamp}}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{$json.signature}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.body}}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "o3-fetch",
+      "name": "Fetch overdue loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "loans",
+        "options": {}
+      },
+      "id": "o4-split",
+      "name": "Split loans",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const loan = $input.first().json;\nconst destination = loan.borrowerEmail || loan.borrowerName || 'borrower';\nconst message = `\"${loan.toolName}\" was due on ${loan.endDate} and is ${loan.daysOverdue} day(s) overdue.`;\nconst asOf = new Date().toISOString().slice(0, 10);\nconst record = {\n  channel: 'log',\n  to: destination,\n  loanId: loan.loanId,\n  message,\n  idempotencyKey: `reminder:${loan.loanId}:${asOf}`,\n  at: new Date().toISOString(),\n};\nconsole.log('[LendLoop] overdue reminder', record);\nreturn [{ json: { ...loan, notification: record, idempotencyKey: record.idempotencyKey, message } }];\n"
+      },
+      "id": "o5-notify",
+      "name": "Log mock reminder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = $env.LENDLOOP_WEBHOOK_SECRET;\nconst site = $env.LENDLOOP_CONVEX_SITE_URL;\nif (!secret) throw new Error('LENDLOOP_WEBHOOK_SECRET is not set');\nif (!site) throw new Error('LENDLOOP_CONVEX_SITE_URL is not set');\n\nconst item = $input.first().json;\nconst body = JSON.stringify({\n  loanId: item.loanId,\n  idempotencyKey: item.idempotencyKey,\n  channel: 'log',\n  message: item.message,\n});\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst hex = crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');\n\nreturn [{\n  json: {\n    url: `${site.replace(/\\/$/, '')}/automation/reminder`,\n    timestamp,\n    signature: `v1=${hex}`,\n    body,\n  },\n}];\n"
+      },
+      "id": "o6-sign-back",
+      "name": "Sign reminder write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{$json.timestamp}}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{$json.signature}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "raw",
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{$json.body}}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "o7-writeback",
+      "name": "Write reminder status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Every day at 08:00 UTC": {
+      "main": [
+        [
+          {
+            "node": "Sign overdue-loans request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign overdue-loans request": {
+      "main": [
+        [
+          {
+            "node": "Fetch overdue loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch overdue loans": {
+      "main": [
+        [
+          {
+            "node": "Split loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split loans": {
+      "main": [
+        [
+          {
+            "node": "Log mock reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log mock reminder": {
+      "main": [
+        [
+          {
+            "node": "Sign reminder write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign reminder write-back": {
+      "main": [
+        [
+          {
+            "node": "Write reminder status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "description": "Daily job: fetch overdue loans from Convex over a signed HTTP call, log a mock reminder, and write the result back idempotently. After import, attach the LendLoop error-handler workflow in Settings \u2192 Error Workflow."
+  },
+  "tags": [
+    {
+      "name": "lendloop"
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "name": "LendLoop \u2013 Request notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-request",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "r1-webhook",
+      "name": "Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "lendloop-request"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = $env.LENDLOOP_WEBHOOK_SECRET;\nif (!secret) {\n  throw new Error('LENDLOOP_WEBHOOK_SECRET is not set on the n8n instance');\n}\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst headerMap = {};\nfor (const [key, value] of Object.entries(headers)) {\n  headerMap[String(key).toLowerCase()] = Array.isArray(value) ? value[0] : value;\n}\n\nconst timestamp = headerMap['x-lendloop-timestamp'] || '';\nconst signature = headerMap['x-lendloop-signature'] || '';\nconst match = /^v1=([0-9a-f]{64})$/i.exec(String(signature));\n\nlet raw = '';\nif (item.binary && item.binary.data && item.binary.data.data) {\n  raw = Buffer.from(item.binary.data.data, 'base64').toString('utf8');\n} else if (typeof item.json.body === 'string') {\n  raw = item.json.body;\n} else if (item.json.body && typeof item.json.body === 'object') {\n  raw = JSON.stringify(item.json.body);\n} else {\n  const copy = { ...item.json };\n  delete copy.headers;\n  delete copy.params;\n  delete copy.query;\n  raw = JSON.stringify(copy.body !== undefined ? copy.body : copy);\n}\n\nconst now = Math.floor(Date.now() / 1000);\nconst ts = Number(timestamp);\nconst validTime = Number.isFinite(ts) && Math.abs(now - ts) <= 300;\nconst expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${raw}`).digest('hex');\nconst provided = match ? match[1].toLowerCase() : '';\n\nlet ok = false;\nif (validTime && provided.length === expected.length && provided.length > 0) {\n  ok = crypto.timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(expected, 'utf8'));\n}\n\nif (!ok) {\n  return [{ json: { ok: false, reason: validTime ? 'signature_mismatch' : 'invalid_timestamp' } }];\n}\n\nconst event = JSON.parse(raw);\nreturn [{\n  json: {\n    ok: true,\n    event: event.event,\n    eventId: event.eventId,\n    requestId: event.requestId,\n    status: event.status,\n    startDate: event.startDate,\n    endDate: event.endDate,\n    toolName: event.toolName,\n    notify: event.notify,\n  },\n}];\n"
+      },
+      "id": "r2-verify",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.ok}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "r3-if",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $input.first().json;\nconst who = event.notify || {};\nconst destination = who.email || who.name || 'unknown neighbor';\nconst message = event.status === 'pending'\n  ? `New borrow request for \"${event.toolName}\" (${event.startDate}\u2013${event.endDate}).`\n  : `Borrow request for \"${event.toolName}\" is now ${event.status}.`;\n\n// Logged mock notification, as allowed by the assignment.\n// Swap this node for Email, Slack, or Discord and keep the same fields.\nconst record = {\n  channel: 'log',\n  to: destination,\n  reason: who.reason || 'status_update',\n  requestId: event.requestId,\n  status: event.status,\n  message,\n  at: new Date().toISOString(),\n};\nconsole.log('[LendLoop] request notification', record);\nreturn [{ json: { ok: true, notification: record } }];\n"
+      },
+      "id": "r4-notify",
+      "name": "Log mock notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "r5-ok",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: $json.reason || 'unauthorized' }) }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "r6-unauth",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Log mock notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log mock notification": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "description": "Verifies a signed Convex webhook and logs a mock notification when a borrow request is created or changes status. After import, attach the LendLoop error-handler workflow in Settings \u2192 Error Workflow."
+  },
+  "tags": [
+    {
+      "name": "lendloop"
+    }
+  ]
+}

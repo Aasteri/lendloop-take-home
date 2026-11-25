@@ -1,0 +1,56 @@
+{
+  "name": "LendLoop \u2013 Error handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e1-error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\n// Log enough to find the failed run, and nothing that looks like a secret.\nconst summary = {\n  workflow: input.workflow?.name || input.workflow?.id || 'unknown',\n  executionId: input.execution?.id || input.executionId || null,\n  node: input.execution?.lastNodeExecuted || input.node?.name || null,\n  message: input.execution?.error?.message || input.error?.message || 'Workflow failed',\n  at: new Date().toISOString(),\n};\nconsole.error('[LendLoop] workflow error', summary);\nreturn [{ json: summary }];\n"
+      },
+      "id": "e2-log-error",
+      "name": "Log failed run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log failed run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "description": "Catches failed LendLoop workflow runs so errors never fail silently."
+  },
+  "tags": [
+    {
+      "name": "lendloop"
+    }
+  ]
+}
